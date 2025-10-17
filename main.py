@@ -19,6 +19,7 @@ class ObjectDetection:
 
     def load_face_model(self):
         model = YOLO("weights/yolov10n-face.pt")
+        # model.to(self.device)
         model.fuse()
         return model
 
