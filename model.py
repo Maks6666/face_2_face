@@ -34,5 +34,14 @@ device = "mps" if torch.backends.mps.is_available() else "cpu"
 link = "conv_3d_model/teacher_model.pt"
 model = TeacherModel()
 model.load_state_dict(torch.load(link, map_location=device))
+# model.to(device)
 print("All keys matched successfully")
+
+# tensor = torch.randn(1, 3, 32, 128, 128)
+# pred = model.predict(tensor)
+# print(pred)
+
+
+
+
 

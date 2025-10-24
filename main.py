@@ -6,8 +6,8 @@ import cv2
 import torch
 from collections import deque, defaultdict
 from model import model
-
-
+import threading
+from names import names
 
 class Tracker:
     def __init__(self, path, device, yolo, save_dir="clips", clip_len=32):
@@ -24,6 +24,11 @@ class Tracker:
 
         self.buffers = defaultdict(lambda: deque(maxlen=32))
 
+        self.actions = {}
+        self.action_names = names
+
+        self.const = 20
+
     def load_model(self):
         model = YOLO(self.yolo)
         model.fuse()
@@ -31,7 +36,7 @@ class Tracker:
         return model
 
     def result(self, frame):
-        results = self.model.predict(source=frame,  conf=0.3)
+        results = self.model.predict(source=frame,  conf=0.3, classes=[0], max_det=2)
         return results
 
     def get_results(self, results):
@@ -50,13 +55,30 @@ class Tracker:
 
             return np.array(res_array)
 
+    def procrss_clip(self, idx, clip):
+        try:
+            # print(f"[Thread] Start processing track {idx}")
+
+            clip = torch.tensor(clip, dtype=torch.float32).unsqueeze(0)
+            pred = model.predict(clip)
+
+            prediction = self.action_names[int(pred)]
+            self.actions[idx] = prediction
+            # print(f"[Thread] Finished {idx}, prediction: {prediction}")
+
+        except Exception as e:
+            import traceback
+            # print(f"[Thread ERROR] Track {idx}: {e}")
+            traceback.print_exc()
+
     def draw(self, bboxes, idc, classes, frame):
         for bbox, idx, cls in zip(bboxes, idc, classes):
             x1, y1, x2, y2 = map(int, bbox)
-            text = f"{idx}:{self.names[int(cls)]}"
+            action = "Analyzing..." if idx not in self.actions else self.actions[idx]
+            text = f"{idx}:{self.names[int(cls)]}:{action}"
 
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(frame, text, (x1, y1), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+            cv2.putText(frame, text, (x1, y1), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 3)
 
         return frame
 
@@ -67,6 +89,7 @@ class Tracker:
 
         while True:
             ret, frame = cap.read()
+            h, w, _ = frame.shape
 
             if not ret:
                 break
@@ -85,6 +108,13 @@ class Tracker:
 
             for bbox, idx in zip(bboxes, idc):
                 x1, y1, x2, y2 = map(int, bbox)
+
+                x1 = min(0, x1 - self.const)
+                y1 = min(0, y1 - self.const)
+
+                x2 = max(w, x2 + self.const)
+                y2 = max(h, y2 + self.const)
+
                 crop = frame[y1:y2, x1:x2]
                 if crop.size == 0:
                     continue
@@ -96,11 +126,14 @@ class Tracker:
                     frames = list(self.buffers[idx])
                     clip = np.stack(frames, axis=0)
                     clip = np.transpose(clip, (3, 0, 1, 2))
-                    clip = torch.tensor(clip, dtype=torch.float32).unsqueeze(0)
+                    # clip = torch.tensor(clip, dtype=torch.float32).unsqueeze(0)
 
-                    pred = model.predict(clip)
+                    threading.Thread(target=self.procrss_clip, args=(idx, clip)).start()
+                    print(self.actions)
 
-                    print(pred)
+
+                    # pred = model.predict(clip)
+                    # print(pred)
 
                     # self.save_clip(track_id=idx, frames=frames)
                     self.buffers[idx].clear()
@@ -116,8 +149,8 @@ class Tracker:
         cap.release()
         cv2.destroyAllWindows()
 
-# path = 1
-path = ""
+# path = 0
+path = "videos/walking_with_dogs.mp4"
 device = "mps" if torch.backends.mps.is_available() else "cpu"
 yolo = "yolo11n.pt"
 tracker = Tracker(path, device, yolo)
