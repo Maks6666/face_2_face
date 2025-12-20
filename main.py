@@ -1,87 +1,77 @@
-import os
-from sort import Sort
-from ultralytics import YOLO
-import numpy as np
+from bokeh.colors.groups import brown
+from deep_sort_realtime.deepsort_tracker import DeepSort
 import cv2
+import torch.nn.functional as F
+from ultralytics import YOLO
 import torch
-from collections import deque, defaultdict
-from model import model
-import threading
-from names import names
+from torchvision import transforms
+from PIL import Image
+
+from triplet.triplet_model import model
+from triplet.calculate_dist import orig_vector, calculate_dist
+
 
 class Tracker:
-    def __init__(self, path, device, yolo, save_dir="clips", clip_len=32):
+    def __init__(self, path):
+        self.tracker = DeepSort(max_iou_distance = 0.7, max_age = 1)
         self.path = path
-        self.yolo = yolo
-        self.device = device
+        self.device = "mps" if torch.backends.mps.is_available() else "cpu"
 
-        self.model = self.load_model()
-        self.names = self.model.names
-        self.tracker = Sort(max_age=60, min_hits=5, iou_threshold=0.4)
-
-        self.clip_len = clip_len
-        self.save_dir = save_dir
-
-        self.buffers = defaultdict(lambda: deque(maxlen=32))
-
-        self.actions = {}
-        self.action_names = names
+        self.yolo = self.load_model()
+        self.transformer = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
 
         self.const = 20
+        self.threshold = 75
 
     def load_model(self):
-        model = YOLO(self.yolo)
+        model = YOLO("yolov12n-face.pt")
         model.fuse()
         model.to(self.device)
         return model
 
-    def result(self, frame):
-        results = self.model.predict(source=frame,  conf=0.3, classes=[0], max_det=2)
+    def results(self, frame):
+        results = self.yolo.predict(frame, max_det=5)[0]
         return results
 
-    def get_results(self, results):
+    def get_results(self, results, frame):
         res_array = []
-        for result in results:
+        for result in results.boxes.data.tolist():
+            x1, y1, x2, y2, score, class_id = result
+            bbox = [int(x1), int(y1), int(x2-x1), int(y2-y1)]
+            res_array.append((bbox, float(score), int(class_id)))
 
-            if len(results) != 0:
+        tracks = self.tracker.update_tracks(raw_detections=res_array, frame=frame)
+        results = []
 
-                boxes = result.boxes.xyxy.cpu().numpy()
-                scores = result.boxes.conf.cpu().numpy()
-                classes = result.boxes.cls.cpu().numpy()
+        for track in tracks:
+            if not track.is_confirmed():
+                continue
 
-                for bbox, score, class_id in zip(boxes, scores, classes):
-                    arr = [bbox[0], bbox[1], bbox[2], bbox[3], score, class_id]
-                    res_array.append(arr)
+            bboxes = track.to_ltrb()
+            idx = track.track_id
+            class_id = track.get_det_class()
 
-            return np.array(res_array)
+            results.append((bboxes, idx, class_id))
 
-    def procrss_clip(self, idx, clip):
-        try:
-            # print(f"[Thread] Start processing track {idx}")
+        return results
 
-            clip = torch.tensor(clip, dtype=torch.float32).unsqueeze(0)
-            pred = model.predict(clip)
+    def transform_img(self, img):
+        img = Image.fromarray(img)
+        img = self.transformer(img)
+        img = img.unsqueeze(0)
+        img = img.to(self.device)
+        return img
 
-            prediction = self.action_names[int(pred)]
-            self.actions[idx] = prediction
-            # print(f"[Thread] Finished {idx}, prediction: {prediction}")
-
-        except Exception as e:
-            import traceback
-            # print(f"[Thread ERROR] Track {idx}: {e}")
-            traceback.print_exc()
-
-    def draw(self, bboxes, idc, classes, frame):
-        for bbox, idx, cls in zip(bboxes, idc, classes):
-            x1, y1, x2, y2 = map(int, bbox)
-            action = "Analyzing..." if idx not in self.actions else self.actions[idx]
-            text = f"{idx}:{self.names[int(cls)]}:{action}"
-
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(frame, text, (x1, y1), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 3)
-
+    def draw_bbox(self, bbox, frame, idx, dist, color):
+        x1, y1, x2, y2 = map(int, bbox)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+        text = f"#{idx}:{dist}%"
+        cv2.putText(frame, text, (x1, y1), cv2.FONT_HERSHEY_SIMPLEX, 1.5, color, 3)
         return frame
-
 
     def __call__(self):
         cap = cv2.VideoCapture(self.path)
@@ -89,74 +79,48 @@ class Tracker:
 
         while True:
             ret, frame = cap.read()
-            h, w, _ = frame.shape
-
             if not ret:
                 break
 
-            results = self.result(frame)
-            res_array = self.get_results(results)
+            results = self.results(frame)
+            res_array = self.get_results(results, frame)
 
-            if len(res_array) == 0:
-                res_array = np.empty((0, 5))
+            dist = 0
 
-            res = self.tracker.update(res_array)
+            for bbox, idx, class_id in res_array:
 
-            bboxes = res[:, :-1]
-            idc = res[:, -1].astype(int)
-            classes = res_array[:, -1].astype(int)
-
-            for bbox, idx in zip(bboxes, idc):
                 x1, y1, x2, y2 = map(int, bbox)
 
-                x1 = min(0, x1 - self.const)
-                y1 = min(0, y1 - self.const)
+                x1 = x1 - self.const
+                y1 = y1 - self.const
+                x2 = x2 + self.const
+                y2 = y2 + self.const
 
-                x2 = max(w, x2 + self.const)
-                y2 = max(h, y2 + self.const)
-
-                crop = frame[y1:y2, x1:x2]
-                if crop.size == 0:
-                    continue
-
-                crop = cv2.resize(crop, (128, 128))
-                self.buffers[idx].append(crop)
-
-                if len(self.buffers[idx]) == self.clip_len:
-                    frames = list(self.buffers[idx])
-                    clip = np.stack(frames, axis=0)
-                    clip = np.transpose(clip, (3, 0, 1, 2))
-                    # clip = torch.tensor(clip, dtype=torch.float32).unsqueeze(0)
-
-                    threading.Thread(target=self.procrss_clip, args=(idx, clip)).start()
-                    print(self.actions)
+                face = frame[y1:y2, x1:x2]
+                img = self.transform_img(face)
 
 
-                    # pred = model.predict(clip)
-                    # print(pred)
+                new_vector = model.predict(img)
 
-                    # self.save_clip(track_id=idx, frames=frames)
-                    self.buffers[idx].clear()
+                new_vector = F.normalize(new_vector, dim=1)
 
+                dist = calculate_dist(orig_vector, new_vector)
+                percent_dist = (1 - round(dist.item(), 2)) * 100
 
-            upd_frame = self.draw(bboxes, idc, classes, frame)
+                if percent_dist > self.threshold:
+                    color = (0, 0, 255)
+                else:
+                    color = (0, 255, 0)
 
-            cv2.imshow('Video', upd_frame)
+                self.draw_bbox(bbox, frame, idx, percent_dist, color)
 
+            cv2.imshow("Video", frame)
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
 
         cap.release()
         cv2.destroyAllWindows()
 
-# path = 0
-path = "videos/walking_with_dogs.mp4"
-device = "mps" if torch.backends.mps.is_available() else "cpu"
-yolo = "yolo11n.pt"
-tracker = Tracker(path, device, yolo)
-
-tracker()
-
-
-
-
+path = "./test_video.mp4"
+tacker = Tracker(path)
+tacker()
