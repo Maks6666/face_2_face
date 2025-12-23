@@ -3,7 +3,7 @@ import torch.nn.functional as F
 import os
 from torchvision import transforms
 from PIL import Image
-from triplet.triplet_model import model
+from triplet.triplet_model import triplet
 
 device = "mps" if torch.backends.mps.is_available() else "cpu"
 
@@ -19,7 +19,7 @@ def transform(path):
     img = Image.open(path).convert("RGB")
     img = transformer(img)
     img = img.unsqueeze(0).to(device)
-    vec = model.predict(img)
+    vec = triplet.predict(img)
     return vec
 
 dir_link = "/Users/maxkucher/PycharmProjects/face_2_face/faces"

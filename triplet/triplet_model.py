@@ -28,7 +28,8 @@ class Net(nn.Module):
         return x
 
 device = "mps" if torch.backends.mps.is_available() else "cpu"
-model = Net()
-model.load_state_dict(torch.load("/Users/maxkucher/PycharmProjects/face_2_face/triplet/triplet_model.pt", map_location=device))
-model.to(device)
+triplet = Net()
+# model.load_state_dict(torch.load("/Users/maxkucher/PycharmProjects/face_2_face/triplet/triplet_model.pt", map_location=device))
+triplet.load_state_dict(torch.load("./triplet/triplet_model.pt", map_location=device))
+triplet.to(device)
 print(f"All keys matched successfully of device: {device}!")

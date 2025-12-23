@@ -1,4 +1,3 @@
-from bokeh.colors.groups import brown
 from deep_sort_realtime.deepsort_tracker import DeepSort
 import cv2
 import torch.nn.functional as F
@@ -7,7 +6,7 @@ import torch
 from torchvision import transforms
 from PIL import Image
 
-from triplet.triplet_model import model
+from triplet.triplet_model import triplet
 from triplet.calculate_dist import orig_vector, calculate_dist
 
 
@@ -100,7 +99,7 @@ class Tracker:
                 img = self.transform_img(face)
 
 
-                new_vector = model.predict(img)
+                new_vector = triplet.predict(img)
 
                 new_vector = F.normalize(new_vector, dim=1)
 
