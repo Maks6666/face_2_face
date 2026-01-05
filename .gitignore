@@ -1,1 +1,2 @@
-*.pt
+teacher_model.pt
+personal_data.py

@@ -1,0 +1,11 @@
+numpy>=1.23
+opencv-python>=4.8
+torch>=2.0
+ultralytics
+filterpy>=1.4.5
+scipy>=1.9
+tqdm>=4.65
+scikit-image>=0.21
+SQLAlchemy>=2.0.25,<3.0
+psycopg2-binary>=2.9.9
+
