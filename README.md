@@ -1,6 +1,14 @@
 # Face real-time tracker
 ![](visual_overwiew/title.jpg)
 
+UPDATE:
+
+Run code with only one row:
+
+```
+python3 ./main.py --path video.mp4 --db True
+```
+
 This project is a real-time human face tracker and classifier, based on the principles of object tracking using the YOLOv10 model (trained specifically for searching human faces), as well as their classification using four custom convolutional neural networks.
 The program saves the data of detected faces into a PostgreSQL database. Based on the data obtained, analytics are also performed, the results of which are visualized using the Grafana tool. 
 ## Principles of the work 
